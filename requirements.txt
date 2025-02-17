@@ -1,5 +1,5 @@
-flask==2.2.2
-Flask-SocketIO==5.3.0
-pycryptodome==3.10.1
-ecdsa==0.18
-streamlit==1.17.0
+flask
+Flask-SocketIO
+pycryptodome
+ecdsa
+streamlit
