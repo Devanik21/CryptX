@@ -1,74 +1,67 @@
 import os
+import streamlit as st
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-import socketio
+from cryptography.hazmat.primitives import serialization
 
-# Generate ECC keys for sender and receiver
-private_key_sender = ec.generate_private_key(ec.SECP384R1())
-private_key_receiver = ec.generate_private_key(ec.SECP384R1())
+# Function to generate ECC keys
+def generate_ecc_keys():
+    private_key = ec.generate_private_key(ec.SECP384R1())
+    public_key = private_key.public_key()
+    return private_key, public_key
 
-# Derive public keys for exchange
-public_key_sender = private_key_sender.public_key()
-public_key_receiver = private_key_receiver.public_key()
+# Function to perform ECDH key exchange to derive shared secret
+def ecdh_key_exchange(private_key, peer_public_key):
+    shared_secret = private_key.exchange(ec.ECDH(), peer_public_key)
+    return shared_secret
 
-# Perform key exchange (ECDH) to generate shared secret
-shared_secret_sender = private_key_sender.exchange(ec.ECDH(), public_key_receiver)
-shared_secret_receiver = private_key_receiver.exchange(ec.ECDH(), public_key_sender)
+# Function to derive AES key from shared secret
+def derive_aes_key(shared_secret):
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"your_salt", iterations=100000)
+    aes_key = kdf.derive(shared_secret)
+    return aes_key
 
-# Ensure the shared secrets are equal
-assert shared_secret_sender == shared_secret_receiver
-
-# Use PBKDF2 to derive a symmetric AES key from the shared secret
-kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"your_salt", iterations=100000)
-aes_key = kdf.derive(shared_secret_sender)
-
-# Encrypt the message with AES
+# Function to encrypt message using AES
 def encrypt_message(aes_key, message):
     cipher = Cipher(algorithms.AES(aes_key), modes.GCM(nonce=b"random_nonce"))
     encryptor = cipher.encryptor()
     ciphertext = encryptor.update(message.encode()) + encryptor.finalize()
-    return ciphertext
+    return ciphertext, encryptor.tag
 
-# Decrypt the message with AES
-def decrypt_message(aes_key, ciphertext):
-    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(nonce=b"random_nonce"))
+# Function to decrypt message using AES
+def decrypt_message(aes_key, ciphertext, tag):
+    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(nonce=b"random_nonce", tag=tag))
     decryptor = cipher.decryptor()
     decrypted_message = decryptor.update(ciphertext) + decryptor.finalize()
     return decrypted_message.decode()
 
-# Set up socket.io client
-sio = socketio.Client()
+# Streamlit UI for chat
+st.title('Secure Chat Application 🔐💬')
 
-# Connect to the server
-sio.connect('http://localhost:5000')
+# Initialize ECC keys for sender and receiver
+private_key_sender, public_key_sender = generate_ecc_keys()
+private_key_receiver, public_key_receiver = generate_ecc_keys()
 
-# Listen for incoming messages from server
-@sio.event
-def connect():
-    print("Connected to server!")
+# Perform ECDH key exchange
+shared_secret_sender = ecdh_key_exchange(private_key_sender, public_key_receiver)
+shared_secret_receiver = ecdh_key_exchange(private_key_receiver, public_key_sender)
 
-@sio.event
-def disconnect():
-    print("Disconnected from server!")
+# Ensure shared secrets match
+assert shared_secret_sender == shared_secret_receiver
 
-# Listen for incoming messages
-@sio.on('chat_message')
-def handle_message(data):
-    encrypted_message = data['message']
-    decrypted_message = decrypt_message(aes_key, encrypted_message)
-    print(f"Received encrypted message: {encrypted_message}")
-    print(f"Decrypted message: {decrypted_message}")
+# Derive AES key from the shared secret
+aes_key = derive_aes_key(shared_secret_sender)
 
-# Send a message
-def send_message(message):
-    encrypted_message = encrypt_message(aes_key, message)
-    sio.emit('chat_message', {'message': encrypted_message})
-    print(f"Sent encrypted message: {encrypted_message}")
+# User input for message
+message = st.text_input("Enter message: ")
 
-# Example usage
-if __name__ == '__main__':
-    message = "Hello, this is a secret message!"
-    send_message(message)
-    sio.wait()  # Wait for incoming messages
+# Encrypt the message with AES
+if message:
+    encrypted_message, tag = encrypt_message(aes_key, message)
+    st.write(f"Encrypted message: {encrypted_message}")
+
+    # Decrypt the message back to verify
+    decrypted_message = decrypt_message(aes_key, encrypted_message, tag)
+    st.write(f"Decrypted message: {decrypted_message}")
