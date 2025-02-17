@@ -3,3 +3,5 @@ Flask-SocketIO
 pycryptodome
 ecdsa
 streamlit
+
+cryptography
