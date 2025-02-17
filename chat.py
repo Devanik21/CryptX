@@ -1,78 +1,61 @@
 import streamlit as st
-import socketio
-import json
-import base64
-from Crypto.Cipher import AES
-from ecdsa import SigningKey, NIST384p
-from ecdsa.util import string_to_number
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes as h
+from cryptography.hazmat.primitives import serialization
 
-# Setup SocketIO connection to backend
-sio = socketio.Client()
+# Function to generate ECC keys
+def generate_ecc_keys():
+    private_key = ec.generate_private_key(ec.SECP256R1())  # ECC curve
+    public_key = private_key.public_key()
+    return private_key, public_key
 
-# Global variables for session
-aes_key = None
-ecc_sk = None  # Elliptic Curve Private Key (for signing)
-ecc_pk = None  # Elliptic Curve Public Key (for key exchange)
-shared_secret = None
+# Function to encrypt message using ECC public key
+def encrypt_message(public_key, message):
+    encrypted = public_key.encrypt(
+        message.encode(),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return encrypted
 
-# Function to generate AES encryption key
-def generate_aes_key():
-    return base64.urlsafe_b64encode(bytes(str(ecc_sk.to_string()), 'utf-8')[:16])
+# Function to decrypt message using ECC private key
+def decrypt_message(private_key, encrypted_message):
+    decrypted = private_key.decrypt(
+        encrypted_message,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return decrypted.decode()
 
-# Encrypt Message with AES
-def encrypt_message(message, key):
-    cipher = AES.new(key, AES.MODE_GCM)
-    ciphertext, tag = cipher.encrypt_and_digest(message.encode())
-    return base64.b64encode(cipher.nonce + tag + ciphertext).decode()
+# Main Streamlit App
+def main():
+    st.title("Encrypted Chat (ECC)")
 
-# Decrypt Message with AES
-def decrypt_message(encrypted_message, key):
-    encrypted_data = base64.b64decode(encrypted_message)
-    nonce, tag, ciphertext = encrypted_data[:16], encrypted_data[16:32], encrypted_data[32:]
-    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-    try:
-        decrypted_message = cipher.decrypt_and_verify(ciphertext, tag).decode()
-        return decrypted_message
-    except ValueError:
-        return "Error: Decryption failed."
+    # Generate ECC keys (private and public)
+    private_key, public_key = generate_ecc_keys()
 
-# SocketIO Event: When server sends a message
-@sio.event
-def message(data):
-    decrypted_message = decrypt_message(data['message'], aes_key)
-    st.write(f"Received: {decrypted_message}")
+    # Input for chat message
+    user_input = st.text_input("Enter your message:")
 
-# Streamlit UI Components
-st.title('Secure Chat Application 🔐💬')
+    if user_input:
+        # Encrypt the message
+        encrypted_message = encrypt_message(public_key, user_input)
+        st.write("Encrypted Message:")
+        st.write(encrypted_message)
 
-# User Input for Message
-message = st.text_input("Enter message:", "")
+        # Decrypt the message
+        decrypted_message = decrypt_message(private_key, encrypted_message)
+        st.write("Decrypted Message (Chat with self):")
+        st.write(decrypted_message)
 
-# Connect Button
-if st.button("Connect to Server"):
-    # Connect to SocketIO backend
-    sio.connect('http://localhost:5000')
-
-    # ECC Key generation (using NIST384p curve)
-    ecc_sk = SigningKey.generate(curve=NIST384p)
-    ecc_pk = ecc_sk.get_verifying_key()
-
-    # Generate AES key using the ECC private key
-    aes_key = generate_aes_key()
-
-    # Send the public key to the backend for secure communication
-    sio.emit('connect_client', {
-        'public_key': base64.b64encode(ecc_pk.to_string()).decode()
-    })
-
-# Sending Encrypted Message
-if st.button("Send Encrypted Message"):
-    if message != "":
-        encrypted_message = encrypt_message(message, aes_key)
-        sio.emit('send_message', {
-            'message': encrypted_message
-        })
-        st.write(f"Sent: {message}")
-    else:
-        st.write("Please enter a message to send.")
-
+# Run the app
+if __name__ == "__main__":
+    main()
