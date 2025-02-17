@@ -1,61 +1,74 @@
-import streamlit as st
+import os
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes as h
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+import socketio
 
-# Function to generate ECC keys
-def generate_ecc_keys():
-    private_key = ec.generate_private_key(ec.SECP256R1())  # ECC curve
-    public_key = private_key.public_key()
-    return private_key, public_key
+# Generate ECC keys for sender and receiver
+private_key_sender = ec.generate_private_key(ec.SECP384R1())
+private_key_receiver = ec.generate_private_key(ec.SECP384R1())
 
-# Function to encrypt message using ECC public key
-def encrypt_message(public_key, message):
-    encrypted = public_key.encrypt(
-        message.encode(),
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None
-        )
-    )
-    return encrypted
+# Derive public keys for exchange
+public_key_sender = private_key_sender.public_key()
+public_key_receiver = private_key_receiver.public_key()
 
-# Function to decrypt message using ECC private key
-def decrypt_message(private_key, encrypted_message):
-    decrypted = private_key.decrypt(
-        encrypted_message,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None
-        )
-    )
-    return decrypted.decode()
+# Perform key exchange (ECDH) to generate shared secret
+shared_secret_sender = private_key_sender.exchange(ec.ECDH(), public_key_receiver)
+shared_secret_receiver = private_key_receiver.exchange(ec.ECDH(), public_key_sender)
 
-# Main Streamlit App
-def main():
-    st.title("Encrypted Chat (ECC)")
+# Ensure the shared secrets are equal
+assert shared_secret_sender == shared_secret_receiver
 
-    # Generate ECC keys (private and public)
-    private_key, public_key = generate_ecc_keys()
+# Use PBKDF2 to derive a symmetric AES key from the shared secret
+kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"your_salt", iterations=100000)
+aes_key = kdf.derive(shared_secret_sender)
 
-    # Input for chat message
-    user_input = st.text_input("Enter your message:")
+# Encrypt the message with AES
+def encrypt_message(aes_key, message):
+    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(nonce=b"random_nonce"))
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(message.encode()) + encryptor.finalize()
+    return ciphertext
 
-    if user_input:
-        # Encrypt the message
-        encrypted_message = encrypt_message(public_key, user_input)
-        st.write("Encrypted Message:")
-        st.write(encrypted_message)
+# Decrypt the message with AES
+def decrypt_message(aes_key, ciphertext):
+    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(nonce=b"random_nonce"))
+    decryptor = cipher.decryptor()
+    decrypted_message = decryptor.update(ciphertext) + decryptor.finalize()
+    return decrypted_message.decode()
 
-        # Decrypt the message
-        decrypted_message = decrypt_message(private_key, encrypted_message)
-        st.write("Decrypted Message (Chat with self):")
-        st.write(decrypted_message)
+# Set up socket.io client
+sio = socketio.Client()
 
-# Run the app
-if __name__ == "__main__":
-    main()
+# Connect to the server
+sio.connect('http://localhost:5000')
+
+# Listen for incoming messages from server
+@sio.event
+def connect():
+    print("Connected to server!")
+
+@sio.event
+def disconnect():
+    print("Disconnected from server!")
+
+# Listen for incoming messages
+@sio.on('chat_message')
+def handle_message(data):
+    encrypted_message = data['message']
+    decrypted_message = decrypt_message(aes_key, encrypted_message)
+    print(f"Received encrypted message: {encrypted_message}")
+    print(f"Decrypted message: {decrypted_message}")
+
+# Send a message
+def send_message(message):
+    encrypted_message = encrypt_message(aes_key, message)
+    sio.emit('chat_message', {'message': encrypted_message})
+    print(f"Sent encrypted message: {encrypted_message}")
+
+# Example usage
+if __name__ == '__main__':
+    message = "Hello, this is a secret message!"
+    send_message(message)
+    sio.wait()  # Wait for incoming messages
