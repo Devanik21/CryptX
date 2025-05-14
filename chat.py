@@ -15,14 +15,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # --- Streamlit UI ---
-st.set_page_config("🛡️ CryptX Vault Pro", layout="wide")
+st.set_page_config("CryptX ", layout="wide",page_icon="🔐")
 st.title("🛡️ CryptX Vault Pro – Advanced Cryptography Suite")
 
 # --- Gemini Key ---
 api_key = st.sidebar.text_input("🔑 Enter Gemini API Key", type="password")
 if api_key:
     genai.configure(api_key=api_key)
-    gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+    gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 
 # --- Modern UI with SelectBox instead of tabs ---
 feature = st.sidebar.selectbox(
