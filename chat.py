@@ -1,67 +1,111 @@
-import os
 import streamlit as st
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import serialization
+import base64
+import os
+import io
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.PublicKey import RSA, ECC
+from Crypto.Signature import pkcs1_15, eddsa
+from Crypto.Hash import SHA256, HMAC
+import google.generativeai as genai
 
-# Function to generate ECC keys
-def generate_ecc_keys():
-    private_key = ec.generate_private_key(ec.SECP384R1())
-    public_key = private_key.public_key()
-    return private_key, public_key
+# --- Streamlit UI ---
+st.set_page_config("🛡️ CryptX Vault", layout="wide")
+st.title("🛡️ CryptX Vault – Secure Multi-Utility Cryptography App")
 
-# Function to perform ECDH key exchange to derive shared secret
-def ecdh_key_exchange(private_key, peer_public_key):
-    shared_secret = private_key.exchange(ec.ECDH(), peer_public_key)
-    return shared_secret
+# --- Gemini Key ---
+api_key = st.sidebar.text_input("🔑 Enter Gemini API Key", type="password")
+if api_key:
+    genai.configure(api_key=api_key)
+    gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
-# Function to derive AES key from shared secret
-def derive_aes_key(shared_secret):
-    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"your_salt", iterations=100000)
-    aes_key = kdf.derive(shared_secret)
-    return aes_key
+# --- Tabs ---
+tabs = st.tabs(["🔐 AES Encrypt/Decrypt", "🔏 RSA & ECC Keys", "📜 HMAC", "🤖 Explain Code"])
 
-# Function to encrypt message using AES
-def encrypt_message(aes_key, message):
-    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(nonce=b"random_nonce"))
-    encryptor = cipher.encryptor()
-    ciphertext = encryptor.update(message.encode()) + encryptor.finalize()
-    return ciphertext, encryptor.tag
+# --- 1. AES Encrypt/Decrypt ---
+with tabs[0]:
+    st.header("🔐 AES File Encryption / Decryption")
+    aes_mode = st.radio("Mode", ["Encrypt", "Decrypt"])
+    uploaded_file = st.file_uploader("Choose a file")
 
-# Function to decrypt message using AES
-def decrypt_message(aes_key, ciphertext, tag):
-    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(nonce=b"random_nonce", tag=tag))
-    decryptor = cipher.decryptor()
-    decrypted_message = decryptor.update(ciphertext) + decryptor.finalize()
-    return decrypted_message.decode()
+    password = st.text_input("Password", type="password")
+    aes_btn = st.button("Run AES")
 
-# Streamlit UI for chat
-st.title('Secure Chat Application 🔐💬')
+    if uploaded_file and password and aes_btn:
+        data = uploaded_file.read()
+        key = SHA256.new(password.encode()).digest()
+        cipher = AES.new(key, AES.MODE_EAX)
 
-# Initialize ECC keys for sender and receiver
-private_key_sender, public_key_sender = generate_ecc_keys()
-private_key_receiver, public_key_receiver = generate_ecc_keys()
+        if aes_mode == "Encrypt":
+            ciphertext, tag = cipher.encrypt_and_digest(data)
+            output = cipher.nonce + tag + ciphertext
+            st.download_button("Download Encrypted File", output, file_name="encrypted.bin")
+        else:
+            try:
+                nonce, tag, ciphertext = data[:16], data[16:32], data[32:]
+                cipher = AES.new(key, AES.MODE_EAX, nonce)
+                decrypted = cipher.decrypt_and_verify(ciphertext, tag)
+                st.download_button("Download Decrypted File", decrypted, file_name="decrypted.txt")
+            except:
+                st.error("❌ Decryption Failed – Wrong Password or Corrupted File")
 
-# Perform ECDH key exchange
-shared_secret_sender = ecdh_key_exchange(private_key_sender, public_key_receiver)
-shared_secret_receiver = ecdh_key_exchange(private_key_receiver, public_key_sender)
+# --- 2. RSA/ECC/EdDSA Playground ---
+with tabs[1]:
+    st.header("🔏 Key Generation + Signature Verification")
+    crypto_type = st.selectbox("Choose Crypto System", ["RSA", "ECC", "EdDSA"])
 
-# Ensure shared secrets match
-assert shared_secret_sender == shared_secret_receiver
+    message = st.text_area("Message to Sign")
+    if st.button("Generate Keys + Sign"):
+        if crypto_type == "RSA":
+            rsa_key = RSA.generate(2048)
+            h = SHA256.new(message.encode())
+            sig = pkcs1_15.new(rsa_key).sign(h)
+            st.code(rsa_key.export_key().decode(), language="pem")
+            st.code(sig.hex(), language="bash")
 
-# Derive AES key from the shared secret
-aes_key = derive_aes_key(shared_secret_sender)
+        elif crypto_type == "ECC":
+            ecc_key = ECC.generate(curve='P-256')
+            h = SHA256.new(message.encode())
+            signer = ecc_key.sign(h)
+            st.code(ecc_key.export_key(format='PEM'), language="pem")
+            st.write("Signature:", signer)
 
-# User input for message
-message = st.text_input("Enter message: ")
+        elif crypto_type == "EdDSA":
+            ed_key = ECC.generate(curve='Ed25519')
+            h = SHA256.new(message.encode())
+            signer = eddsa.new(ed_key, 'rfc8032')
+            signature = signer.sign(h)
+            st.code(ed_key.export_key(format='PEM'), language="pem")
+            st.write("Signature (hex):", signature.hex())
 
-# Encrypt the message with AES
-if message:
-    encrypted_message, tag = encrypt_message(aes_key, message)
-    st.write(f"Encrypted message: {encrypted_message}")
+# --- 3. HMAC Generator ---
+with tabs[2]:
+    st.header("📜 HMAC Generator")
+    hmac_key = st.text_input("Secret Key")
+    hmac_msg = st.text_area("Message")
 
-    # Decrypt the message back to verify
-    decrypted_message = decrypt_message(aes_key, encrypted_message, tag)
-    st.write(f"Decrypted message: {decrypted_message}")
+    if st.button("Generate HMAC"):
+        h = HMAC.new(hmac_key.encode(), digestmod=SHA256)
+        h.update(hmac_msg.encode())
+        st.code(h.hexdigest(), language="bash")
+
+# --- 4. Gemini-Powered Code Explain ---
+with tabs[3]:
+    st.header("🤖 Gemini-Powered Code Explainer")
+    code_input = st.text_area("Paste Code to Explain", height=250)
+
+    if st.button("Explain Code with Gemini"):
+        if api_key and code_input.strip():
+            with st.spinner("Explaining with Gemini..."):
+                explain_prompt = f"Explain what this code does in detail:\n\n{code_input}"
+                try:
+                    resp = gemini_model.generate_content(explain_prompt)
+                    st.success("✅ Explanation:")
+                    st.markdown(resp.text)
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+        else:
+            st.warning("Please enter your Gemini API Key and code.")
+
+st.markdown("---")
+st.caption("Built with ❤️ using PyCryptodome, Streamlit, and Gemini AI.")
