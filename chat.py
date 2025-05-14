@@ -15,7 +15,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # --- Streamlit UI ---
-st.set_page_config("CryptX ", layout="wide",page_icon="🔐")
+st.set_page_config("CryptX", layout="wide",page_icon="🔐")
 st.title("🛡️ CryptX Vault Pro – Advanced Cryptography Suite")
 
 # --- Gemini Key ---
