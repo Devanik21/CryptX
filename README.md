@@ -827,4 +827,4 @@ MIT License. Cryptographic implementations based on PyCryptodome (BSD-licensed) 
 **Document Version**: 1.0  
 **Last Updated**: February 2026  
 **Author**: Devanik  
-**Repository**: [GitHub URL]
+**Repository**: [https://github.com/Devanik21/CryptX/tree/main]
